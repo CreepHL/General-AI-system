@@ -1,0 +1,187 @@
+/* Bright default palette; the header toggle still enables dark mode. */
+body.light-mode {
+  --bg: #f4f7fb;
+  --panel: #fff;
+  --panel2: #f8fafd;
+  --line: #dce5ef;
+  --cyan: #087c9b;
+  --purple: #8b4ab4;
+  --green: #087b58;
+  --orange: #a96600;
+  --muted: #52657b;
+  color: #1a2d43;
+  background: radial-gradient(ellipse at 80% 0%, #e6f4ff, transparent 38%), var(--bg);
+}
+.light-mode.app-shell {
+  color: #1a2d43;
+  background: transparent;
+}
+.app-shell.light-mode .history-heading,
+.app-shell.light-mode .history-copy strong,
+.app-shell.light-mode .message-bubble {
+  color: #1a2d43;
+}
+.app-shell.light-mode .history-copy small,
+.app-shell.light-mode .conversation-header p {
+  color: #52657b;
+}
+.app-shell.light-mode .top-page,
+.app-shell.light-mode .brand strong,
+.app-shell.light-mode .page-content h1,
+.app-shell.light-mode .page-content h2 {
+  color: #142b45;
+}
+.app-shell.light-mode .sidebar {
+  background: #fff;
+  border-color: var(--line);
+  box-shadow: 3px 0 18px #223d6010;
+}
+.light-mode .brand small,
+.light-mode .sidebar-bottom,
+.light-mode .user-chip small {
+  color: #667a90;
+}
+.light-mode .nav-label {
+  color: #798da2;
+}
+.light-mode .nav-item {
+  color: #536a82;
+}
+.app-shell.light-mode .nav-item.active,
+.app-shell.light-mode .nav-item:hover {
+  background: #eaf5fb;
+  color: #087c9b;
+  box-shadow: inset 3px 0 #087c9b;
+}
+.light-mode .sidebar-bottom,
+.light-mode .user-chip {
+  border-color: var(--line);
+}
+.app-shell.light-mode .topbar {
+  background: #ffffffd9;
+  border-color: var(--line);
+}
+.app-shell.light-mode .top-icon,
+.app-shell.light-mode .icon-button {
+  background: #f6f9fc;
+  color: #526980;
+  border-color: #d9e4ee;
+}
+.light-mode .top-icon:hover,
+.light-mode .icon-button:hover {
+  color: var(--cyan);
+  border-color: var(--cyan);
+}
+.light-mode .panel,
+.light-mode .stat-card,
+.light-mode .agent-card,
+.light-mode .team-card,
+.light-mode .config-card {
+  background: #fff;
+  color: #1a2d43;
+  border-color: var(--line);
+  box-shadow: 0 7px 24px #23415e0b;
+}
+.light-mode .stat-card {
+  background: linear-gradient(135deg, #fff, #f8fbff);
+}
+.light-mode .avatar,
+.light-mode .member-avatar,
+.light-mode .quick-icon,
+.light-mode .node-index {
+  background: #e7f5fa;
+  color: var(--cyan);
+  border-color: #b7dce9;
+}
+.light-mode .card-metrics,
+.light-mode .quick-item,
+.light-mode .agent-mini,
+.light-mode .task-owner,
+.light-mode .result-box,
+.light-mode .chat-bar,
+.light-mode .workflow-mini {
+  background: #f5f9fd;
+  color: #253a50;
+  border-color: var(--line);
+}
+.light-mode .status-pill {
+  background: #e7f6ef;
+  color: #087b58;
+  border-color: #b9e4ce;
+}
+.light-mode .status-pill.offline {
+  background: #f1f4f7;
+  color: #64748b;
+  border-color: #dbe3eb;
+}
+.light-mode .card-meta,
+.light-mode .task-row,
+.light-mode .activity {
+  border-color: var(--line);
+}
+.light-mode .progress-line {
+  background: #e5edf5;
+}
+.light-mode .workflow-board {
+  background-color: #f8fbfe;
+  background-image: radial-gradient(#d9e6ef 1px, transparent 1px);
+  border-color: #cbdce9;
+}
+.light-mode .workflow-node {
+  background: #fff;
+  border-color: #74bed1;
+  box-shadow: 0 5px 16px #1d65831a;
+}
+.light-mode .el-card {
+  color: #1a2d43;
+}
+.light-mode .el-input__wrapper,
+.light-mode .el-textarea__inner,
+.light-mode .el-select__wrapper,
+body.light-mode .el-dialog .el-input__wrapper,
+body.light-mode .el-dialog .el-textarea__inner,
+body.light-mode .el-dialog .el-select__wrapper {
+  background: #fff !important;
+  box-shadow: 0 0 0 1px #d6e1eb inset !important;
+}
+.light-mode .el-input__inner,
+.light-mode .el-textarea__inner,
+body.light-mode .el-dialog .el-input__inner,
+body.light-mode .el-dialog .el-textarea__inner {
+  color: #1a2d43 !important;
+}
+.light-mode .el-table {
+  --el-table-header-bg-color: #f2f7fb;
+  --el-table-row-hover-bg-color: #eaf4fa;
+  --el-table-border-color: #e2eaf2;
+  --el-table-text-color: #253a50;
+  --el-table-header-text-color: #526980;
+}
+.light-mode .el-table th.el-table__cell {
+  background: #f2f7fb !important;
+}
+.light-mode .el-form-item__label,
+body.light-mode .el-dialog .el-form-item__label {
+  color: #465c73;
+}
+body.light-mode .el-dialog {
+  background: #fff !important;
+  color: #1a2d43;
+  border-color: var(--line);
+}
+body.light-mode .el-dialog__title {
+  color: #1a2d43;
+}
+body.light-mode .el-dropdown-menu {
+  background: #fff !important;
+  border-color: #dce5ef !important;
+}
+body.light-mode .el-dropdown-menu__item {
+  color: #253a50 !important;
+}
+body.light-mode .el-dropdown-menu__item:hover {
+  background: #edf6fb !important;
+}
+body.light-mode .el-message {
+  border-color: #dce5ef !important;
+}

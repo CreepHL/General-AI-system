@@ -1,0 +1,18 @@
+/* Additional small-screen and modal polish */
+.el-dialog__body {
+  max-height: 70vh;
+  overflow: auto;
+}
+.el-message {
+  border-color: #24485e !important;
+}
+.el-dropdown-menu {
+  background: #101d30 !important;
+  border-color: #28455b !important;
+}
+.el-dropdown-menu__item {
+  color: #dce8f8 !important;
+}
+.el-dropdown-menu__item:hover {
+  background: #173047 !important;
+}

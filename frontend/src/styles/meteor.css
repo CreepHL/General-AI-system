@@ -1,0 +1,130 @@
+/* Decorative, CSS-only motion beneath the content layer. */
+.main-shell {
+  position: relative;
+  isolation: isolate;
+}
+
+.main-shell > .topbar,
+.main-shell > .page-content {
+  position: relative;
+  z-index: 1;
+}
+
+.ambient-sky {
+  position: fixed;
+  inset: 0 0 0 226px;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  contain: layout paint;
+  --meteor-color: 18, 232, 255;
+  mask-image: linear-gradient(to bottom, transparent 4%, #000 28%, #000 95%);
+}
+
+.meteor {
+  position: absolute;
+  top: var(--top);
+  left: var(--left);
+  width: var(--length);
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(var(--meteor-color), 0.18) 22%,
+    rgba(var(--meteor-color), 0.65) 82%,
+    rgba(var(--meteor-color), 0.95)
+  );
+  filter: drop-shadow(0 0 8px rgba(var(--meteor-color), 0.55));
+  transform: rotate(-25deg) translate3d(-32vw, 0, 0);
+  transform-origin: right center;
+  opacity: 0;
+  animation: meteor-pass var(--duration) linear infinite;
+  animation-delay: var(--delay);
+  will-change: transform, opacity;
+}
+
+.meteor::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: -3px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: rgba(var(--meteor-color), 0.95);
+  box-shadow: 0 0 12px rgba(var(--meteor-color), 0.65);
+}
+
+.meteor-1 {
+  --top: 22%;
+  --left: 28%;
+  --length: 320px;
+  --duration: 29s;
+  --delay: -3s;
+}
+.meteor-2 {
+  --top: 43%;
+  --left: 69%;
+  --length: 260px;
+  --duration: 33s;
+  --delay: -18s;
+}
+.meteor-3 {
+  --top: 70%;
+  --left: 43%;
+  --length: 360px;
+  --duration: 37s;
+  --delay: -12s;
+}
+.meteor-4 {
+  --top: 87%;
+  --left: 85%;
+  --length: 280px;
+  --duration: 31s;
+  --delay: -24s;
+}
+.meteor-5 {
+  --top: 55%;
+  --left: 12%;
+  --length: 240px;
+  --duration: 35s;
+  --delay: -28s;
+}
+
+@keyframes meteor-pass {
+  0% {
+    transform: rotate(-25deg) translate3d(-32vw, 0, 0);
+    opacity: 0;
+  }
+  8% {
+    opacity: 0.85;
+  }
+  82% {
+    opacity: 0.85;
+  }
+  100% {
+    transform: rotate(-25deg) translate3d(42vw, 0, 0);
+    opacity: 0;
+  }
+}
+
+body.light-mode .ambient-sky {
+  --meteor-color: 27, 125, 165;
+}
+body.light-mode .meteor {
+  opacity: 0;
+}
+
+@media (max-width: 850px) {
+  .ambient-sky {
+    left: 70px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meteor {
+    animation: none;
+    opacity: 0;
+  }
+}
