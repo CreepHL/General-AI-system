@@ -205,7 +205,8 @@ def request_model_chunks(model: dict, messages: list[dict], temperature: float, 
         raise ChatProviderError('模型服务返回了无效的 JSON 响应，请检查接口是否兼容 OpenAI Chat Completions') from exc
 
 
-def request_model(model: dict, messages: list[dict], temperature: float, source='task', task_id=None) -> str:
+def request_model(model: dict, messages: list[dict], temperature: float, source='task', task_id=None,
+                  require_complete=False) -> str:
     url, timeout, max_tokens = model_request_options(model)
     try:
         with httpx.Client(timeout=timeout, follow_redirects=False, trust_env=False) as client:
@@ -216,6 +217,8 @@ def request_model(model: dict, messages: list[dict], temperature: float, source=
             )
             response.raise_for_status()
             data = response.json()
+            if not isinstance(data, dict):
+                raise ChatProviderError('模型服务返回的响应结构无效')
             record_usage(model, data.get('usage'), source, task_id)
     except httpx.HTTPStatusError as exc:
         raise ChatProviderError(provider_error_detail(exc.response)) from exc
@@ -227,6 +230,11 @@ def request_model(model: dict, messages: list[dict], temperature: float, source=
         raise ChatProviderError('模型服务请求失败，请检查网络、TLS 证书及 Base URL') from exc
     except ValueError as exc:
         raise ChatProviderError('模型服务返回了无效的 JSON 响应，请检查接口是否兼容 OpenAI Chat Completions') from exc
+    choices = data.get('choices')
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        raise ChatProviderError('模型服务返回的响应结构无效')
+    if require_complete and choices[0].get('finish_reason') not in {'stop', 'end_turn'}:
+        raise ChatProviderError('模型输出未正常结束，应用代码可能被截断；请重试或调高模型输出 Token 上限')
     try:
         content = data['choices'][0]['message']['content']
         if isinstance(content, list):
@@ -252,6 +260,10 @@ def test_model(model: ConfigItem, override_key: str = '') -> dict:
 
 
 def run_task_turn(db: Session, task: Task, user_message: TaskMessage) -> list[TaskMessage]:
+    if (task.workflow or {}).get('app_mode'):
+        from .app_builder import build_app_turn
+        list(build_app_turn(db, task, user_message))
+        return db.query(TaskMessage).filter(TaskMessage.task_id == task.id, TaskMessage.id > user_message.id).order_by(TaskMessage.id).all()
     agents = agents_for_task(db, task)
     configs = [(agent, model_for_agent(db, agent), system_prompt(db, agent)) for agent in agents]
     history = db.query(TaskMessage).filter(TaskMessage.task_id == task.id, TaskMessage.id <= user_message.id).order_by(TaskMessage.id).all()[-24:]
@@ -301,6 +313,10 @@ def run_task_turn(db: Session, task: Task, user_message: TaskMessage) -> list[Ta
 
 def stream_task_turn(db: Session, task: Task, user_message: TaskMessage):
     """Yield agent deltas and persist replies only after every agent succeeds."""
+    if (task.workflow or {}).get('app_mode'):
+        from .app_builder import build_app_turn
+        yield from build_app_turn(db, task, user_message)
+        return
     agents = agents_for_task(db, task)
     configs = [(agent, model_for_agent(db, agent), system_prompt(db, agent)) for agent in agents]
     history = db.query(TaskMessage).filter(TaskMessage.task_id == task.id, TaskMessage.id <= user_message.id).order_by(TaskMessage.id).all()[-24:]

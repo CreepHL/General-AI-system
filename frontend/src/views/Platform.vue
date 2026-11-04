@@ -61,9 +61,12 @@
               <div class="card-name">{{ item.name }}</div>
               <div class="card-role">{{ item.code || item.provider || section.toUpperCase() }}</div>
             </div>
-            <el-tag size="small" :type="item.status === '已启用' ? 'success' : 'info'">{{
-              item.status
-            }}</el-tag>
+            <div class="card-state">
+              <el-tag size="small" :type="(section === 'agents' ? item.enabled : item.status === '已启用') ? 'success' : 'info'">{{ item.status }}</el-tag>
+              <el-switch v-if="section === 'models'" :model-value="item.status === '已启用'"
+                :loading="togglingId === item.id" :disabled="togglingId !== null"
+                :aria-label="item.name + '启用或停用'" @change="toggle(item)" />
+            </div>
           </div>
           <div class="desc">{{ item.description || '暂无说明' }}</div>
           <div class="card-meta">
@@ -361,6 +364,7 @@ const knowledgeQuery = ref('')
 const knowledgeSearched = ref(false)
 const knowledgeUploading = ref(false)
 const knowledgeFile = ref(null)
+const togglingId = ref(null)
 const modelOptions = ref([]),
   promptOptions = ref([]),
   skillOptions = ref([])
@@ -530,17 +534,18 @@ async function save() {
   }
 }
 async function toggle(x) {
-  const next = {
-    ...x,
-    status: x.status === '已启用' ? '已停用' : '已启用',
-    enabled: x.status !== '已启用'
-  }
+  if (togglingId.value !== null) return
+  togglingId.value = x.id
   try {
-    if (section.value === 'agents') await api.saveAgent(next)
-    else await api.saveConfig({ ...next, category: section.value })
-    await load()
-  } catch {
-    ElMessage.error('更新失败')
+    const updated = section.value === 'agents'
+      ? await api.saveAgent({ ...x, enabled: !x.enabled, status: x.enabled ? '离线' : '在线' })
+      : await api.setConfigStatus(x.id, x.status === '已启用' ? '已停用' : '已启用')
+    Object.assign(x, updated)
+    ElMessage.success(updated.status)
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '更新失败')
+  } finally {
+    togglingId.value = null
   }
 }
 async function remove(x) {
@@ -613,6 +618,7 @@ onMounted(load)
 .config-card {
   min-height: 185px;
 }
+.card-state { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .knowledge-actions, .knowledge-document { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .knowledge-actions { justify-content: flex-start; margin-bottom: 16px; }
 .knowledge-document, .knowledge-hit { padding: 10px 0; border-bottom: 1px solid var(--line); }

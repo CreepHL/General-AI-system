@@ -15,11 +15,13 @@ async function streamTask(path, body, onEvent) {
   const decoder = new TextDecoder()
   let pending = ''
   let completed = false
+  let artifactReceived = false
   function consume(block) {
     const line = block.split('\n').find((part) => part.startsWith('data:'))
     if (!line) return
     const event = JSON.parse(line.slice(5).trim())
     onEvent(event)
+    if (event.type === 'artifact') artifactReceived = true
     if (event.type === 'error') throw new Error(event.detail)
     if (event.type === 'done') completed = true
   }
@@ -35,6 +37,7 @@ async function streamTask(path, body, onEvent) {
   }
   if (pending.trim()) consume(pending)
   if (!completed) throw new Error('流式连接中断，请重试上一条消息')
+  return { artifactReceived }
 }
 export const api = {
   dashboard: () => http.get('/dashboard').then((r) => r.data),
@@ -53,12 +56,17 @@ export const api = {
   tasks: () => http.get('/tasks').then((r) => r.data),
   runningTaskCount: () => http.get('/tasks/running-count').then((r) => r.data.count),
   createTask: (x) => http.post('/tasks', x).then((r) => r.data),
+  taskApp: (id) => http.get('/tasks/' + id + '/app').then((r) => r.data),
+  taskAppVersions: (id) => http.get('/tasks/' + id + '/app/versions').then((r) => r.data),
+  taskAppVersion: (id, version) => http.get('/tasks/' + id + '/app/versions/' + version).then((r) => r.data),
+  restoreTaskAppVersion: (id, version) => http.post('/tasks/' + id + '/app/versions/' + version + '/restore').then((r) => r.data),
   taskMessages: (id) => http.get('/tasks/' + id + '/messages').then((r) => r.data),
   sendTaskMessage: (id, content) =>
     http.post('/tasks/' + id + '/messages', { content }, { timeout: 600000 }).then((r) => r.data),
   streamTaskMessage: (id, content, onEvent) =>
     streamTask('/tasks/' + id + '/messages/stream', { content }, onEvent),
   streamTaskRetry: (id, onEvent) => streamTask('/tasks/' + id + '/retry/stream', null, onEvent),
+  streamTaskAppRebuild: (id, onEvent) => streamTask('/tasks/' + id + '/app/rebuild/stream', null, onEvent),
   streamTaskStart: (id, onEvent) => streamTask('/tasks/' + id + '/start/stream', null, onEvent),
   retryTaskMessage: (id) =>
     http.post('/tasks/' + id + '/retry', null, { timeout: 600000 }).then((r) => r.data),
@@ -83,6 +91,7 @@ export const api = {
     x.id
       ? http.put(`/config/${x.id}`, x).then((r) => r.data)
       : http.post('/config', x).then((r) => r.data),
+  setConfigStatus: (id, status) => http.patch(`/config/${id}/status`, { status }).then((r) => r.data),
   deleteConfig: (id) => http.delete(`/config/${id}`),
   knowledgeDocuments: (id) => http.get('/knowledge/' + id + '/documents').then((r) => r.data),
   uploadKnowledgeDocument: (id, file) => {

@@ -2,18 +2,21 @@ from fastapi import APIRouter,Depends,HTTPException,UploadFile,File,Query
 from fastapi.responses import FileResponse,StreamingResponse
 from fastapi.encoders import jsonable_encoder
 import json
+import logging
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 from datetime import timezone,timedelta
 from sqlalchemy import desc,func
 from ..database import get_db
-from ..models import Agent,Team,Task,TaskMessage,TaskAttachment,ConfigItem,Activity,ModelUsage,KnowledgeDocument,KnowledgeChunk
-from ..schemas import AgentIn,TeamIn,TaskIn,TaskMessageIn,TaskConnectorsIn,ConfigIn,ModelTestIn
+from ..models import Agent,Team,Task,TaskMessage,TaskAttachment,ConfigItem,Activity,ModelUsage,KnowledgeDocument,KnowledgeChunk,AppArtifact
+from ..schemas import AgentIn,TeamIn,TaskIn,TaskMessageIn,TaskConnectorsIn,ConfigIn,ConfigStatusIn,ModelTestIn
 from ..services.chat_runtime import ChatConfigurationError,ChatProviderError,run_task_turn,stream_task_turn,test_model
 from ..services.knowledge import extract_text,chunk_text,search_chunks
 router=APIRouter(prefix='/api')
+logger=logging.getLogger(__name__)
 UPLOAD_DIR=Path(__file__).resolve().parents[2]/'uploads'
 MAX_ATTACHMENT_SIZE=10*1024*1024
 def dump(obj):
@@ -72,6 +75,32 @@ def list_tasks(db:Session=Depends(get_db)): return [dump(x) for x in db.query(Ta
 @router.get('/tasks/running-count')
 def running_task_count(db:Session=Depends(get_db)):
  return {'count':db.query(Task).filter(Task.status=='进行中').count()}
+@router.get('/tasks/{id}/app')
+def get_task_app(id:int,db:Session=Depends(get_db)):
+ if not db.get(Task,id): raise HTTPException(404,'Task not found')
+ artifact=db.query(AppArtifact).filter(AppArtifact.task_id==id).order_by(desc(AppArtifact.version)).first()
+ return dump(artifact) if artifact else None
+@router.get('/tasks/{id}/app/versions')
+def get_task_app_versions(id:int,db:Session=Depends(get_db)):
+ if not db.get(Task,id): raise HTTPException(404,'Task not found')
+ return [{'id':item.id,'version':item.version,'title':item.title,'created_at':item.created_at}
+         for item in db.query(AppArtifact).filter(AppArtifact.task_id==id).order_by(desc(AppArtifact.version)).all()]
+@router.get('/tasks/{id}/app/versions/{version}')
+def get_task_app_version(id:int,version:int,db:Session=Depends(get_db)):
+ if not db.get(Task,id): raise HTTPException(404,'Task not found')
+ artifact=db.query(AppArtifact).filter(AppArtifact.task_id==id,AppArtifact.version==version).first()
+ if not artifact: raise HTTPException(404,'应用版本不存在')
+ return dump(artifact)
+@router.post('/tasks/{id}/app/versions/{version}/restore')
+def restore_task_app_version(id:int,version:int,db:Session=Depends(get_db)):
+ task=db.get(Task,id)
+ if not task or not (task.workflow or {}).get('app_mode'): raise HTTPException(404,'应用任务不存在')
+ source=db.query(AppArtifact).filter(AppArtifact.task_id==id,AppArtifact.version==version).first()
+ if not source: raise HTTPException(404,'应用版本不存在')
+ newest=db.query(func.max(AppArtifact.version)).filter(AppArtifact.task_id==id).scalar() or 0
+ artifact=AppArtifact(task_id=id,version=newest+1,title=source.title,html=source.html,css=source.css,javascript=source.javascript)
+ db.add(artifact); task.status='可预览'; task.progress=100; task.result=''; db.commit(); db.refresh(artifact)
+ return dump(artifact)
 @router.post('/tasks')
 def create_task(body:TaskIn,db:Session=Depends(get_db)):
  knowledge_ids=(body.workflow or {}).get('knowledge_ids') or []
@@ -123,19 +152,34 @@ def create_task_message(id:int,body:TaskMessageIn,db:Session=Depends(get_db)):
  except ChatConfigurationError as exc: raise HTTPException(422,str(exc)) from exc
  except ChatProviderError as exc: raise HTTPException(502,str(exc)) from exc
  return {'user_message':dump(x),'replies':[dump(reply) for reply in replies]}
-def task_stream(db:Session,task:Task,latest:TaskMessage,user_message:dict|None=None):
+def task_stream(db:Session,task:Task,latest:TaskMessage|None,user_message:dict|None=None,prompt_override:str|None=None):
  session_factory=sessionmaker(bind=db.get_bind())
- task_id,latest_id=task.id,latest.id
+ task_id,latest_id=task.id,latest.id if latest else None
  def events():
   if user_message: yield 'data: '+json.dumps(jsonable_encoder({'type':'user_message','message':user_message}),ensure_ascii=False)+'\n\n'
   with session_factory() as stream_db:
+   stream_task=None
    try:
     stream_task=stream_db.get(Task,task_id)
-    stream_latest=stream_db.get(TaskMessage,latest_id)
+    stream_latest=stream_db.get(TaskMessage,latest_id) if latest_id else None
+    if prompt_override is not None:
+     stream_latest=SimpleNamespace(content=prompt_override)
     for event in stream_task_turn(stream_db,stream_task,stream_latest):
      yield 'data: '+json.dumps(jsonable_encoder(event),ensure_ascii=False)+'\n\n'
    except (ChatConfigurationError,ChatProviderError) as exc:
+    if stream_task and (stream_task.workflow or {}).get('app_mode') and stream_task.status!='生成失败':
+     stream_task.status='生成失败'; stream_task.progress=0; stream_task.result=str(exc)[:500]; stream_db.commit()
     yield 'data: '+json.dumps({'type':'error','detail':str(exc)},ensure_ascii=False)+'\n\n'
+   except Exception:
+    logger.exception('Task stream failed for task %s',task_id)
+    stream_db.rollback()
+    try:
+     failed_task=stream_db.get(Task,task_id)
+     if failed_task and (failed_task.workflow or {}).get('app_mode'):
+      failed_task.status='生成失败'; failed_task.progress=0; failed_task.result='应用生成遇到内部错误，请稍后重试'; stream_db.commit()
+    except Exception:
+     logger.exception('Unable to persist failed app status for task %s',task_id)
+    yield 'data: '+json.dumps({'type':'error','detail':'应用生成遇到内部错误，请稍后重试'},ensure_ascii=False)+'\n\n'
  return StreamingResponse(events(),media_type='text/event-stream',headers={'Cache-Control':'no-cache','X-Accel-Buffering':'no'})
 @router.post('/tasks/{id}/messages/stream')
 def create_task_message_stream(id:int,body:TaskMessageIn,db:Session=Depends(get_db)):
@@ -154,6 +198,19 @@ def retry_task_message_stream(id:int,db:Session=Depends(get_db)):
  latest=db.query(TaskMessage).filter(TaskMessage.task_id==id).order_by(desc(TaskMessage.id)).first()
  if not latest or latest.role!='user': raise HTTPException(422,'没有可重试的用户消息')
  return task_stream(db,task,latest)
+@router.post('/tasks/{id}/app/rebuild/stream')
+def rebuild_task_app_stream(id:int,db:Session=Depends(get_db)):
+ task=db.get(Task,id)
+ if not task: raise HTTPException(404,'Task not found')
+ if db.query(AppArtifact).filter(AppArtifact.task_id==id).first():
+  raise HTTPException(409,'已有可预览版本，请在对话中发送修改要求')
+ requests=db.query(TaskMessage).filter(TaskMessage.task_id==id,TaskMessage.role=='user').order_by(TaskMessage.id).all()
+ prompt='\n\n'.join(message.content.strip() for message in requests if message.content.strip()) or (task.description or '').strip()
+ if not prompt: raise HTTPException(422,'没有可重新执行的原始需求')
+ if len(prompt)>20000: raise HTTPException(422,'历史需求过长，请在新任务中精简后生成')
+ task.workflow={**(task.workflow or {}),'app_mode':True}
+ db.commit()
+ return task_stream(db,task,requests[-1] if requests else None,prompt_override=prompt)
 @router.post('/tasks/{id}/start/stream')
 def start_task_stream(id:int,db:Session=Depends(get_db)):
  task=db.get(Task,id)
@@ -264,6 +321,12 @@ def test_model_connection(id:int,body:ModelTestIn,db:Session=Depends(get_db)):
 @router.post('/config')
 def create_config(body:ConfigIn,db:Session=Depends(get_db)):
  x=ConfigItem(**body.model_dump()); db.add(x); db.commit(); db.refresh(x); return dump(x)
+@router.patch('/config/{id}/status')
+def update_config_status(id:int,body:ConfigStatusIn,db:Session=Depends(get_db)):
+ x=db.get(ConfigItem,id)
+ if not x: raise HTTPException(404,'Config not found')
+ x.status=body.status
+ db.commit(); db.refresh(x); return dump(x)
 @router.put('/config/{id}')
 def update_config(id:int,body:ConfigIn,db:Session=Depends(get_db)):
  x=db.get(ConfigItem,id)

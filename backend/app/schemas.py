@@ -1,5 +1,5 @@
 from pydantic import BaseModel,Field
-from typing import Any
+from typing import Any,Literal
 class AgentIn(BaseModel):
  name:str; role:str='通用助手'; description:str=''; model_name:str='DeepSeek-V3'; temperature:float=.3; memory_type:str='短期记忆'; prompt:str=''; tools:list[str]=Field(default_factory=list); status:str='在线'; enabled:bool=True
  model_config_id:int|None=None; prompt_config_id:int|None=None; skill_config_ids:list[int]=Field(default_factory=list)
@@ -15,3 +15,5 @@ class TaskConnectorsIn(BaseModel):
  codes:list[str]=Field(default_factory=list)
 class ConfigIn(BaseModel):
  category:str; name:str; code:str=''; provider:str=''; model_name:str=''; base_url:str=''; api_key:str=''; description:str=''; content:str=''; status:str='已启用'; is_default:bool=False; extra:dict[str,Any]=Field(default_factory=dict)
+class ConfigStatusIn(BaseModel):
+ status:Literal['已启用','已停用']

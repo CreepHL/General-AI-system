@@ -35,7 +35,7 @@
       </div>
     </aside>
 
-    <section class="conversation-main">
+    <section class="conversation-main" :class="{ 'preview-hidden': selected?.workflow?.app_mode && !previewVisible }">
       <template v-if="!selected">
         <div class="welcome">
           <div class="welcome-mark">✳</div>
@@ -112,6 +112,11 @@
               @click="startSelected"
               >开始任务</el-button
             >
+            <el-button v-if="canRebuildApp" type="primary" plain :loading="starting"
+              :disabled="sending" @click="rebuildSelectedApp">按原需求重新生成预览</el-button>
+            <label v-if="selected.workflow?.app_mode" class="preview-toggle"><span>预览</span>
+              <el-switch v-model="previewVisible" aria-label="显示应用预览" @change="savePreviewVisibility" />
+            </label>
             <el-button @click="openNew()">＋ 新建</el-button>
           </div>
         </header>
@@ -122,6 +127,7 @@
             <span class="saved-flow-node">{{ agents.find((agent) => agent.id === node.agent_id)?.name || '智能体 #' + node.agent_id }}</span>
           </template>
         </div>
+        <div class="conversation-workspace" :class="{ 'with-app': selected.workflow?.app_mode && previewVisible }">
         <div ref="messageList" class="message-list">
           <div v-if="!messages.length && selected.description" class="message-row mine">
             <div class="message-bubble">{{ selected.description }}</div>
@@ -161,6 +167,30 @@
           >
             任务已创建。发送一条消息，补充你的目标或要求。
           </div>
+        </div>
+        <section v-if="selected.workflow?.app_mode && previewVisible" class="app-preview">
+          <div class="app-preview-toolbar">
+            <div>
+              <strong>{{ appArtifact?.title || '应用预览' }}</strong>
+              <small v-if="appArtifact">版本 v{{ appArtifact.version }} · {{ selected.status === '生成失败' ? '本轮生成失败，保留上一可用版' : previewError || '可操作预览' }}</small>
+              <small v-else>{{ selected.status === '生成失败' ? '生成失败，可点击顶部按钮重试' : '等待生成应用' }}</small>
+            </div>
+            <div class="app-preview-actions">
+              <el-select v-if="appArtifact" v-model="previewVersion" size="small" style="width: 112px" @change="showAppVersion">
+                <el-option v-for="item in appVersions" :key="item.version" :label="'版本 v' + item.version" :value="item.version" />
+              </el-select>
+              <el-button v-if="appArtifact" size="small" @click="reloadPreview">刷新</el-button>
+              <el-button v-if="appArtifact && previewVersion !== appVersions[0]?.version" size="small" @click="restoreAppVersion">恢复此版</el-button>
+            </div>
+          </div>
+          <iframe v-if="appArtifact" :key="previewKey" ref="appFrame" class="app-frame"
+            :srcdoc="previewDocument" sandbox="allow-scripts" referrerpolicy="no-referrer"
+            title="生成应用的隔离预览" />
+          <div v-else class="app-preview-empty">
+            {{ starting || sending ? '正在生成并校验应用，请稍候…' : '输入应用需求并发送，生成后可直接在这里使用。' }}
+          </div>
+          <p v-if="previewError" class="app-preview-error">预览运行异常：{{ previewError }}。可继续对话修复，上一版仍可恢复。</p>
+        </section>
         </div>
         <div class="chat-composer">
           <el-input
@@ -324,6 +354,10 @@
             placeholder="补充背景、目标或交付要求；也可以创建后再发消息"
           />
         </el-form-item>
+        <el-form-item label="生成可操作应用">
+          <el-switch v-model="form.app_mode" />
+          <span class="app-mode-help">开启后生成可在右侧直接使用的单页应用；后续消息用于修改同一应用。</span>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="newDialog = false">取消</el-button>
@@ -334,7 +368,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api'
 
@@ -354,6 +388,13 @@ const uploading = ref(false)
 const fileInput = ref(null)
 const selected = ref(null)
 const messageList = ref(null)
+const appFrame = ref(null)
+const appArtifact = ref(null)
+const appVersions = ref([])
+const previewVersion = ref(null)
+const previewError = ref('')
+const previewKey = ref(0)
+const previewVisible = ref(true)
 const search = ref('')
 const draft = ref('')
 const reply = ref('')
@@ -371,6 +412,7 @@ const form = ref({
   target_id: null,
   agent_ids: [],
   knowledge_ids: [],
+  app_mode: true,
   collaboration_mode: '串行',
   workflow: { nodes: [] }
 })
@@ -405,6 +447,70 @@ const enabledTools = computed(() =>
   tools.value.filter((tool) => tool.status === '已启用' && tool.code)
 )
 const canRetry = computed(() => messages.value.at(-1)?.role === 'user')
+const canRebuildApp = computed(() => selected.value && !appArtifact.value &&
+  (messages.value.some((message) => message.role === 'user') || selected.value.description?.trim()) &&
+  (!selected.value.workflow?.app_mode || selected.value.status === '生成失败'))
+function readAppState(taskId) {
+  try { return JSON.parse(localStorage.getItem('general-ai-app-state-' + taskId) || '{}') }
+  catch { return {} }
+}
+const previewDocument = computed(() => {
+  if (!appArtifact.value || !selected.value) return ''
+  const app = appArtifact.value
+  const state = JSON.stringify(readAppState(selected.value.id)).replace(/</g, '\\u003c')
+  const bootstrap = 'const state=' + state + ';window.appStore={get:key=>state[key],set:(key,value)=>{state[key]=value;parent.postMessage({type:"app-store-set",key,value},"*")}};window.addEventListener("error",e=>parent.postMessage({type:"app-preview-error",message:e.message},"*"));window.addEventListener("unhandledrejection",e=>parent.postMessage({type:"app-preview-error",message:String(e.reason)},"*"));'
+  const scriptEnd = '</scr' + 'ipt>'
+  return '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'nonce-app-preview\'; style-src \'unsafe-inline\'; img-src data: blob:; connect-src \'none\'; form-action \'none\'; base-uri \'none\'"><meta name="viewport" content="width=device-width,initial-scale=1"><style>' + app.css + '</style></head><body>' + app.html + '<script nonce="app-preview">' + bootstrap + scriptEnd + '<script nonce="app-preview">' + app.javascript + scriptEnd + '</body></html>'
+})
+function onAppMessage(event) {
+  if (!appFrame.value || event.source !== appFrame.value.contentWindow || !selected.value?.workflow?.app_mode) return
+  const data = event.data
+  if (!data || typeof data !== 'object') return
+  if (data.type === 'app-preview-error') {
+    previewError.value = String(data.message || '未知错误').slice(0, 200)
+  } else if (data.type === 'app-store-set' && typeof data.key === 'string' && data.key.length <= 100) {
+    try {
+      const state = readAppState(selected.value.id)
+      state[data.key] = data.value
+      const encoded = JSON.stringify(state)
+      if (encoded.length <= 100000) localStorage.setItem('general-ai-app-state-' + selected.value.id, encoded)
+    } catch {
+      previewError.value = '应用数据无法保存到本机浏览器'
+    }
+  }
+}
+function reloadPreview() { previewError.value = ''; previewKey.value++ }
+function readPreviewVisibility(taskId) {
+  try { return localStorage.getItem('general-ai-preview-visible-' + taskId) !== 'off' }
+  catch { return true }
+}
+function savePreviewVisibility(value) {
+  if (!selected.value) return
+  try { localStorage.setItem('general-ai-preview-visible-' + selected.value.id, value ? 'on' : 'off') }
+  catch { /* Keep this tab's choice when browser storage is unavailable. */ }
+  if (value) reloadPreview()
+}
+async function showAppVersion(version) {
+  if (!selected.value) return
+  const taskId = selected.value.id
+  try {
+    const artifact = await api.taskAppVersion(taskId, version)
+    if (selected.value?.id === taskId) { appArtifact.value = artifact; reloadPreview() }
+  } catch { ElMessage.error('读取应用版本失败') }
+}
+async function restoreAppVersion() {
+  if (!selected.value || !previewVersion.value) return
+  try {
+    const artifact = await api.restoreTaskAppVersion(selected.value.id, previewVersion.value)
+    appArtifact.value = artifact
+    appVersions.value = await api.taskAppVersions(selected.value.id)
+    previewVersion.value = artifact.version
+    selected.value.status = '可预览'
+    selected.value.result = ''
+    reloadPreview()
+    ElMessage.success('旧版本已恢复为最新版本')
+  } catch { ElMessage.error('恢复版本失败') }
+}
 function streamEvent(taskId) {
   return (event) => {
     if (selected.value?.id !== taskId) return
@@ -424,13 +530,40 @@ function streamEvent(taskId) {
       const index = messages.value.findIndex((item) => item.streamKey === key)
       if (index >= 0) messages.value.splice(index, 1, event.message)
       else messages.value.push(event.message)
+    } else if (event.type === 'status') {
+      selected.value.status = event.status
+      if (selected.value.workflow?.app_mode) selected.value.result = ''
+    } else if (event.type === 'error' && selected.value.workflow?.app_mode) {
+      selected.value.status = '生成失败'
+      selected.value.result = event.detail
+    } else if (event.type === 'artifact') {
+      appArtifact.value = event.artifact
+      previewVersion.value = event.artifact.version
+      appVersions.value.unshift({ id: event.artifact.id, version: event.artifact.version, title: event.artifact.title })
+      selected.value.status = '可预览'
+      selected.value.result = ''
+      reloadPreview()
     }
     nextTick(() => { if (messageList.value) messageList.value.scrollTop = messageList.value.scrollHeight })
   }
 }
 async function recoverStream(taskId) {
   if (selected.value?.id !== taskId) return
-  try { messages.value = await api.taskMessages(taskId) } catch { /* retain visible partial response */ }
+  const [messageResult, taskResult, appResult, versionResult] = await Promise.allSettled([
+    api.taskMessages(taskId), api.tasks(), api.taskApp(taskId), api.taskAppVersions(taskId)
+  ])
+  if (selected.value?.id !== taskId) return
+  if (messageResult.status === 'fulfilled') messages.value = messageResult.value
+  if (taskResult.status === 'fulfilled') {
+    tasks.value = taskResult.value
+    selected.value = tasks.value.find((item) => item.id === taskId) || selected.value
+  }
+  if (appResult.status === 'fulfilled' && selected.value.workflow?.app_mode) {
+    appArtifact.value = appResult.value
+    previewVersion.value = appResult.value?.version || null
+    reloadPreview()
+  }
+  if (versionResult.status === 'fulfilled') appVersions.value = versionResult.value
 }
 const filteredTasks = computed(() =>
   tasks.value.filter((task) =>
@@ -448,6 +581,7 @@ const taskGroups = computed(() =>
 )
 
 onMounted(async () => {
+  window.addEventListener('message', onAppMessage)
   loading.value = true
   try {
     const [taskRows, agentRows, teamRows, toolRows, knowledgeRows] = await Promise.all([
@@ -468,6 +602,7 @@ onMounted(async () => {
     loading.value = false
   }
 })
+onUnmounted(() => window.removeEventListener('message', onAppMessage))
 
 function openNew(description = '') {
   form.value = {
@@ -477,6 +612,7 @@ function openNew(description = '') {
     target_id: null,
     agent_ids: [],
     knowledge_ids: [],
+    app_mode: true,
     collaboration_mode: '串行',
     workflow: { nodes: [] }
   }
@@ -491,16 +627,26 @@ function resetTargets() {
 
 async function selectTask(task) {
   selected.value = task
+  previewVisible.value = readPreviewVisibility(task.id)
   messages.value = []
   attachments.value = []
+  appArtifact.value = null
+  appVersions.value = []
+  previewVersion.value = null
+  previewError.value = ''
   try {
-    const [taskMessages, taskAttachments] = await Promise.all([
+    const [taskMessages, taskAttachments, artifact, versions] = await Promise.all([
       api.taskMessages(task.id),
-      api.taskAttachments(task.id)
+      api.taskAttachments(task.id),
+      task.workflow?.app_mode ? api.taskApp(task.id) : Promise.resolve(null),
+      task.workflow?.app_mode ? api.taskAppVersions(task.id) : Promise.resolve([])
     ])
     if (selected.value?.id !== task.id) return
     messages.value = taskMessages
     attachments.value = taskAttachments
+    appArtifact.value = artifact
+    appVersions.value = versions
+    previewVersion.value = artifact?.version || null
     await nextTick()
     if (messageList.value) messageList.value.scrollTop = messageList.value.scrollHeight
   } catch {
@@ -545,9 +691,10 @@ async function createTask() {
               agent_ids: selectedAgents.map((agent) => agent.id),
               connector_codes: pendingConnectorCodes.value,
               knowledge_ids: form.value.knowledge_ids,
+              app_mode: form.value.app_mode,
               ...(form.value.collaboration_mode === '流程图编排' ? { nodes: form.value.workflow.nodes } : {})
             }
-          : { connector_codes: pendingConnectorCodes.value, knowledge_ids: form.value.knowledge_ids,
+          : { connector_codes: pendingConnectorCodes.value, knowledge_ids: form.value.knowledge_ids, app_mode: form.value.app_mode,
               ...(form.value.collaboration_mode === '流程图编排' ? { nodes: form.value.workflow.nodes } : {}) }
     })
     tasks.value.unshift(task)
@@ -576,10 +723,12 @@ async function sendMessage() {
   sending.value = true
   try {
     const taskId = selected.value.id
-    await api.streamTaskMessage(taskId, content, streamEvent(taskId))
-    if (selected.value?.id === taskId) selected.value.status = '进行中'
+    const outcome = await api.streamTaskMessage(taskId, content, streamEvent(taskId))
+    if (selected.value?.workflow?.app_mode && !outcome.artifactReceived) throw new Error('未收到完整的应用产物，请重试')
+    const nextStatus = selected.value?.workflow?.app_mode ? '可预览' : '进行中'
+    if (selected.value?.id === taskId) selected.value.status = nextStatus
     tasks.value = tasks.value.map((item) =>
-      item.id === taskId ? { ...item, status: '进行中' } : item
+      item.id === taskId ? { ...item, status: nextStatus } : item
     )
     window.dispatchEvent(new Event('tasks-changed'))
     await nextTick()
@@ -601,7 +750,9 @@ async function retryMessage() {
   sending.value = true
   try {
     const taskId = selected.value.id
-    await api.streamTaskRetry(taskId, streamEvent(taskId))
+    const outcome = await api.streamTaskRetry(taskId, streamEvent(taskId))
+    if (selected.value?.workflow?.app_mode && !outcome.artifactReceived) throw new Error('未收到完整的应用产物，请重试')
+    if (selected.value?.id === taskId && selected.value.workflow?.app_mode) selected.value.status = '可预览'
     window.dispatchEvent(new Event('tasks-changed'))
     await nextTick()
     if (messageList.value) messageList.value.scrollTop = messageList.value.scrollHeight
@@ -613,18 +764,38 @@ async function retryMessage() {
   }
 }
 
+async function rebuildSelectedApp() {
+  if (!canRebuildApp.value || starting.value || sending.value) return
+  const taskId = selected.value.id
+  starting.value = true
+  selected.value.workflow = { ...(selected.value.workflow || {}), app_mode: true }
+  try {
+    const outcome = await api.streamTaskAppRebuild(taskId, streamEvent(taskId))
+    if (!outcome.artifactReceived) throw new Error('未收到完整的应用产物，请重试')
+    await recoverStream(taskId)
+    ElMessage.success('应用已生成，可在右侧操作预览')
+  } catch (error) {
+    await recoverStream(taskId)
+    ElMessage.error(error.message || '重新生成失败')
+  } finally {
+    starting.value = false
+  }
+}
+
 async function startSelected() {
   if (!selected.value) return
   starting.value = true
   try {
     const taskId = selected.value.id
-    await api.streamTaskStart(taskId, streamEvent(taskId))
+    const outcome = await api.streamTaskStart(taskId, streamEvent(taskId))
+    if (selected.value?.workflow?.app_mode && !outcome.artifactReceived) throw new Error('未收到完整的应用产物，请重试')
     if (selected.value?.id === taskId) {
-      selected.value.status = '进行中'
-      tasks.value = tasks.value.map((item) => item.id === taskId ? { ...item, status: '进行中' } : item)
+      const nextStatus = selected.value.workflow?.app_mode ? '可预览' : '进行中'
+      selected.value.status = nextStatus
+      tasks.value = tasks.value.map((item) => item.id === taskId ? { ...item, status: nextStatus } : item)
     }
     window.dispatchEvent(new Event('tasks-changed'))
-    ElMessage.success('智能体已回复')
+    ElMessage.success(selected.value?.workflow?.app_mode ? '应用已生成，可直接预览' : '智能体已回复')
   } catch (error) {
     await recoverStream(selected.value.id)
     ElMessage.error(error.message || '启动任务失败')
@@ -860,6 +1031,81 @@ async function saveConnectors() {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+}
+.conversation-workspace {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 280px;
+}
+.conversation-workspace .message-list {
+  min-width: 0;
+}
+.conversation-workspace.with-app .message-list {
+  flex: 0 0 38%;
+  padding: 18px;
+  border-right: 1px solid var(--line);
+}
+.conversation-workspace.with-app .message-bubble {
+  max-width: 100%;
+}
+.app-preview {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 340px;
+  background: var(--panel);
+}
+.app-preview-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.app-preview-toolbar strong, .app-preview-toolbar small {
+  display: block;
+}
+.app-preview-toolbar small {
+  color: var(--muted);
+  margin-top: 3px;
+}
+.app-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.preview-toggle { display: inline-flex; align-items: center; gap: 6px; margin: 0 8px; color: var(--muted); font-size: 13px; white-space: nowrap; }
+.app-frame {
+  flex: 1;
+  width: 100%;
+  min-height: 360px;
+  border: 0;
+  background: #fff;
+}
+.app-preview-empty {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+}
+.app-preview-error {
+  margin: 0;
+  padding: 8px 14px;
+  color: #b42318;
+  background: #fff1ef;
+  font-size: 12px;
+}
+.app-mode-help {
+  margin-left: 12px;
+  color: var(--muted);
+  font-size: 12px;
 }
 .welcome {
   display: flex;
@@ -1104,12 +1350,27 @@ async function saveConnectors() {
 .chat-composer {
   margin: 0 auto 22px;
 }
+.conversation-main.preview-hidden .chat-composer {
+  width: min(calc(100% - 48px), 1000px);
+}
+.conversation-main.preview-hidden .message-bubble {
+  max-width: min(85%, 900px);
+}
 @media (max-width: 900px) {
   .conversation-page {
     grid-template-columns: 220px minmax(0, 1fr);
   }
   .chat-composer {
     width: calc(100% - 32px);
+  }
+  .conversation-workspace.with-app {
+    flex-direction: column;
+  }
+  .conversation-workspace.with-app .message-list {
+    flex: 0 0 auto;
+    max-height: 220px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
   }
 }
 @media (max-width: 700px) {

@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import String,Text,Integer,Float,Boolean,DateTime,JSON
+from sqlalchemy import String,Text,Integer,Float,Boolean,DateTime,JSON,UniqueConstraint
 from sqlalchemy.orm import Mapped,mapped_column
 from .database import Base
 class Agent(Base):
@@ -16,6 +16,17 @@ class TaskMessage(Base):
  __tablename__='task_messages'
  id:Mapped[int]=mapped_column(Integer,primary_key=True,index=True); task_id:Mapped[int]=mapped_column(Integer,index=True); role:Mapped[str]=mapped_column(String(20),default='user'); content:Mapped[str]=mapped_column(Text); created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
  agent_name:Mapped[str]=mapped_column(String(120),default='')
+class AppArtifact(Base):
+ __tablename__='app_artifacts'
+ __table_args__=(UniqueConstraint('task_id','version',name='uq_app_artifact_task_version'),)
+ id:Mapped[int]=mapped_column(Integer,primary_key=True,index=True)
+ task_id:Mapped[int]=mapped_column(Integer,index=True)
+ version:Mapped[int]=mapped_column(Integer)
+ title:Mapped[str]=mapped_column(String(200))
+ html:Mapped[str]=mapped_column(Text)
+ css:Mapped[str]=mapped_column(Text)
+ javascript:Mapped[str]=mapped_column(Text)
+ created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
 class TaskAttachment(Base):
  __tablename__='task_attachments'
  id:Mapped[int]=mapped_column(Integer,primary_key=True,index=True); task_id:Mapped[int]=mapped_column(Integer,index=True); filename:Mapped[str]=mapped_column(String(255)); storage_name:Mapped[str]=mapped_column(String(64)); content_type:Mapped[str]=mapped_column(String(160),default='application/octet-stream'); size:Mapped[int]=mapped_column(Integer); created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
