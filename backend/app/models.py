@@ -5,7 +5,7 @@ from .database import Base
 class Agent(Base):
  __tablename__='agents'
  id:Mapped[int]=mapped_column(Integer,primary_key=True,index=True); name:Mapped[str]=mapped_column(String(120)); role:Mapped[str]=mapped_column(String(80),default='通用助手'); description:Mapped[str]=mapped_column(String(500),default=''); model_name:Mapped[str]=mapped_column(String(120),default='DeepSeek-V3'); temperature:Mapped[float]=mapped_column(Float,default=.3); memory_type:Mapped[str]=mapped_column(String(40),default='短期记忆'); prompt:Mapped[str]=mapped_column(Text,default=''); tools:Mapped[list]=mapped_column(JSON,default=list); status:Mapped[str]=mapped_column(String(30),default='在线'); enabled:Mapped[bool]=mapped_column(Boolean,default=True); completed_tasks:Mapped[int]=mapped_column(Integer,default=0); success_rate:Mapped[float]=mapped_column(Float,default=.95); created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
- model_config_id:Mapped[int|None]=mapped_column(Integer,nullable=True); prompt_config_id:Mapped[int|None]=mapped_column(Integer,nullable=True); skill_config_ids:Mapped[list]=mapped_column(JSON,default=list)
+ model_config_id:Mapped[int|None]=mapped_column(Integer,nullable=True); prompt_config_id:Mapped[int|None]=mapped_column(Integer,nullable=True); skill_config_ids:Mapped[list]=mapped_column(JSON,default=list); tool_config_ids:Mapped[list]=mapped_column(JSON,default=list)
 class Team(Base):
  __tablename__='teams'
  id:Mapped[int]=mapped_column(Integer,primary_key=True,index=True); name:Mapped[str]=mapped_column(String(120)); description:Mapped[str]=mapped_column(String(500),default=''); mode:Mapped[str]=mapped_column(String(40),default='串行'); is_template:Mapped[bool]=mapped_column(Boolean,default=False); agent_ids:Mapped[list]=mapped_column(JSON,default=list); completed_tasks:Mapped[int]=mapped_column(Integer,default=0); running_tasks:Mapped[int]=mapped_column(Integer,default=0); created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
@@ -16,6 +16,7 @@ class TaskMessage(Base):
  __tablename__='task_messages'
  id:Mapped[int]=mapped_column(Integer,primary_key=True,index=True); task_id:Mapped[int]=mapped_column(Integer,index=True); role:Mapped[str]=mapped_column(String(20),default='user'); content:Mapped[str]=mapped_column(Text); created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
  agent_name:Mapped[str]=mapped_column(String(120),default='')
+ details:Mapped[dict]=mapped_column(JSON,default=dict)
 class AppArtifact(Base):
  __tablename__='app_artifacts'
  __table_args__=(UniqueConstraint('task_id','version',name='uq_app_artifact_task_version'),)
@@ -27,6 +28,14 @@ class AppArtifact(Base):
  css:Mapped[str]=mapped_column(Text)
  javascript:Mapped[str]=mapped_column(Text)
  created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)
+class AppData(Base):
+ __tablename__='app_data'
+ __table_args__=(UniqueConstraint('task_id','key',name='uq_app_data_task_key'),)
+ id:Mapped[int]=mapped_column(Integer,primary_key=True,index=True)
+ task_id:Mapped[int]=mapped_column(Integer,index=True)
+ key:Mapped[str]=mapped_column(String(100))
+ value_json:Mapped[str]=mapped_column(Text)
+ updated_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow,onupdate=datetime.utcnow)
 class TaskAttachment(Base):
  __tablename__='task_attachments'
  id:Mapped[int]=mapped_column(Integer,primary_key=True,index=True); task_id:Mapped[int]=mapped_column(Integer,index=True); filename:Mapped[str]=mapped_column(String(255)); storage_name:Mapped[str]=mapped_column(String(64)); content_type:Mapped[str]=mapped_column(String(160),default='application/octet-stream'); size:Mapped[int]=mapped_column(Integer); created_at:Mapped[datetime]=mapped_column(DateTime,default=datetime.utcnow)

@@ -89,20 +89,32 @@ def agents_for_task(db: Session, task: Task) -> list[Agent]:
 
 
 def system_prompt(db: Session, agent: Agent) -> str:
-    prompt = (agent.prompt or '').strip()
+    custom_prompt = (agent.prompt or '').strip()
+    prompt = custom_prompt
     if agent.prompt_config_id:
         item = db.get(ConfigItem, agent.prompt_config_id)
         if item and item.category == 'prompts' and item.status == '已启用':
-            prompt = (item.content or '').strip() or prompt
+            configured = (item.content or '').strip()
+            if configured:
+                prompt = configured + (f'\n\nAgent 补充指令：{custom_prompt}' if custom_prompt else '')
     if not prompt:
         prompt = f'你是{agent.name}，职责是{agent.role}。请直接回答用户的问题。'
     skills = []
     for skill_id in agent.skill_config_ids or []:
         item = db.get(ConfigItem, skill_id)
         if item and item.category == 'skills' and item.status == '已启用' and item.content:
-            skills.append(f'【{item.name}】 ' + item.content[:4000])
+            skills.append(f'【{item.name}】 ' + item.content)
     if skills:
-        prompt += ' 可用技能说明： ' + ' '.join(skills[:5])
+        prompt += '\n\n绑定 Skill：\n' + '\n'.join(skills)
+    bound_tools = []
+    for tool_id in agent.tool_config_ids or []:
+        item = db.get(ConfigItem, tool_id)
+        if item and item.category == 'tools' and item.status == '已启用':
+            bound_tools.append(f'【{item.name}】{item.description}')
+    if bound_tools:
+        prompt += '\n\n绑定 Tools 目录（当前执行器尚未接入，不能声称已经调用）：\n' + '\n'.join(bound_tools)
+    if len(prompt) > 50000:
+        raise ChatConfigurationError(f'{agent.name} 的 Prompt 和 Skill 内容过长，请精简后重试')
     return prompt
 
 
@@ -136,6 +148,21 @@ def knowledge_context(db: Session, task: Task, query: str) -> str:
     )
 
 
+def model_timeout_seconds(options: dict, default: int = 60) -> int:
+    value = options.get('timeout_seconds')
+    if value is None or value == '':
+        return default
+    try:
+        if isinstance(value, bool) or (isinstance(value, float) and not value.is_integer()):
+            raise ValueError
+        timeout = int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ChatConfigurationError('请求超时必须为 5 至 3600 秒的整数') from exc
+    if not 5 <= timeout <= 3600:
+        raise ChatConfigurationError('请求超时必须为 5 至 3600 秒的整数')
+    return timeout
+
+
 def model_request_options(model: dict) -> tuple[str, int, int]:
     base_url = str(model['base_url']).rstrip('/')
     parsed = urlsplit(base_url)
@@ -153,8 +180,8 @@ def model_request_options(model: dict) -> tuple[str, int, int]:
             raise ChatConfigurationError('模型服务地址不能指向内网或本机地址')
     url = base_url if base_url.endswith('/chat/completions') else base_url + '/chat/completions'
     options = model.get('extra') or {}
+    timeout = model_timeout_seconds(options)
     try:
-        timeout = max(5, min(180, int(options.get('timeout_seconds') or 60)))
         max_tokens = max(128, min(128000, int(options.get('max_tokens') or 3000)))
     except (TypeError, ValueError) as exc:
         raise ChatConfigurationError('模型的超时或 Token 配置无效') from exc
@@ -253,7 +280,7 @@ def test_model(model: ConfigItem, override_key: str = '') -> dict:
         raise ChatConfigurationError('请先配置 API Key')
     content = request_model(
         {'id': model.id, 'provider': model.provider, 'base_url': model.base_url, 'model_name': model.model_name,
-         'api_key': key, 'extra': (model.extra or {}) | {'timeout_seconds': 30, 'max_tokens': 128}},
+         'api_key': key, 'extra': (model.extra or {}) | {'max_tokens': 128}},
         [{'role': 'user', 'content': '请只回复 OK'}], 0, source='test',
     )
     return {'ok': True, 'model': model.model_name, 'response': content[:200]}

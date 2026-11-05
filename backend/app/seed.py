@@ -1,6 +1,8 @@
 from .models import Agent,Team,Task,ConfigItem,Activity
+from .default_catalog import DEFAULT_PROMPTS,DEFAULT_SKILLS,DEFAULT_TOOLS,DEMO_AGENT_BINDINGS
 def seed(db):
- if db.query(Agent).count()==0:
+ seeded_agents=db.query(Agent).count()==0
+ if seeded_agents:
   db.add_all([Agent(name='产品经理 Agent',role='产品经理',description='需求澄清、PRD 与验收标准',model_name='DeepSeek-V3',temperature=.4,tools=['需求分析','文档生成'],completed_tasks=45,success_rate=.96),Agent(name='架构师 Agent',role='架构师',description='系统架构与技术选型',model_name='GPT-4o',temperature=.2,tools=['架构设计'],completed_tasks=34,success_rate=.99),Agent(name='前端开发 Agent',role='前端工程师',description='Vue 页面与交互开发',model_name='DeepSeek-V3',temperature=.3,tools=['代码生成','代码审查'],completed_tasks=89,success_rate=.95),Agent(name='后端开发 Agent',role='后端工程师',description='API 与数据层开发',model_name='DeepSeek-V3',temperature=.2,tools=['代码生成','数据库'],completed_tasks=128,success_rate=.98),Agent(name='测试 Agent',role='测试工程师',description='测试用例、回归与质量检查',model_name='GPT-4o-mini',temperature=.1,tools=['测试生成'],completed_tasks=67,success_rate=.92),Agent(name='研究员 Agent',role='研究员',description='资料研究与证据整理',model_name='DeepSeek-V3',temperature=.5,tools=['网页检索','知识库'],completed_tasks=23,success_rate=.88,enabled=False,status='离线')]); db.flush()
  if db.query(Team).count()==0:
   db.add_all([Team(name='全栈开发团队',description='产品、架构、前后端与测试协同完成开发任务',mode='串行',is_template=True,agent_ids=[1,2,3,4,5],completed_tasks=28,running_tasks=3),Team(name='架构设计团队',description='聚焦系统架构设计与技术方案输出',mode='并行',agent_ids=[2,6],completed_tasks=12,running_tasks=1),Team(name='快速开发小队',description='轻量级团队，适合小型项目快速迭代',mode='串行',agent_ids=[3,4],completed_tasks=45,running_tasks=5)])
@@ -13,5 +15,21 @@ def seed(db):
   for name,code,desc in [('文档处理 Skill','document-processing','读取、总结并结构化文档'),('代码审查 Skill','code-review','审查代码质量、安全性和测试覆盖')]: rows.append(ConfigItem(category='skills',name=name,code=code,description=desc,content='# Skill\n\n定义适用场景、输入、步骤、输出与边界。'))
   for name,code,desc in [('网页检索','web-search','检索公开信息'),('文件读写','file-io','受控读写任务工作区文件'),('代码执行','code-runner','在隔离环境中运行代码')]: rows.append(ConfigItem(category='tools',name=name,code=code,description=desc,status='已启用'))
   rows.append(ConfigItem(category='knowledge',name='通用技术知识库',code='general-tech-kb',description='上传技术文档与项目规范后可供任务检索',status='已启用')); db.add_all(rows)
+ db.flush()
+ existing={(item.category,item.code):item for item in db.query(ConfigItem).filter(ConfigItem.category.in_(['prompts','skills','tools'])).all() if item.code}
+ for category,catalog in [('prompts',DEFAULT_PROMPTS),('skills',DEFAULT_SKILLS),('tools',DEFAULT_TOOLS)]:
+  for code,(name,description,content) in catalog.items():
+   if (category,code) in existing: continue
+   item=ConfigItem(category=category,name=name,code=code,description=description,content=content,status='已启用',extra={'execution':'not_connected'} if category=='tools' else {})
+   db.add(item); existing[(category,code)]=item
+ db.flush()
+ if seeded_agents:
+  for agent in db.query(Agent).all():
+   binding=DEMO_AGENT_BINDINGS.get(agent.name)
+   if not binding: continue
+   prompt_code,skill_codes,tool_codes=binding
+   agent.prompt_config_id=existing[('prompts',prompt_code)].id
+   agent.skill_config_ids=[existing[('skills',code)].id for code in skill_codes]
+   agent.tool_config_ids=[existing[('tools',code)].id for code in tool_codes]
  if db.query(Activity).count()==0: db.add_all([Activity(title='任务「电商接口开发」已完成',detail='全栈开发团队 · 任务执行',kind='success'),Activity(title='后端开发 Agent 开始新任务',detail='API 开发与数据层',kind='agent'),Activity(title='新任务「Vue3 组件库」已创建',detail='快速开发小队 · 并行',kind='task'),Activity(title='架构设计团队新增成员',detail='团队配置更新',kind='team')])
  db.commit()

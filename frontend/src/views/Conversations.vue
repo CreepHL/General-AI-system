@@ -142,6 +142,14 @@
               <strong v-if="message.agent_name" class="message-agent">{{
                 message.agent_name
               }}</strong>
+              <div v-if="message.details?.model" class="message-agent-details">
+                <span>{{ message.details.role || '智能体' }}</span>
+                <span>模型：{{ message.details.model }}（{{ message.details.model_name }}）</span>
+                <span>Prompt：{{ message.details.prompt }}</span>
+                <span>Skill：{{ message.details.skills?.join('、') || '无' }}</span>
+                <span>Tools：{{ message.details.tools?.join('、') || '无' }}（未调用）</span>
+                <span v-if="message.details.context_sources?.length">上下文：{{ message.details.context_sources.join('、') }}</span>
+              </div>
               {{ message.content }}<span v-if="message.streaming" class="stream-cursor">▍</span>
             </div>
           </div>
@@ -179,15 +187,16 @@
               <el-select v-if="appArtifact" v-model="previewVersion" size="small" style="width: 112px" @change="showAppVersion">
                 <el-option v-for="item in appVersions" :key="item.version" :label="'版本 v' + item.version" :value="item.version" />
               </el-select>
-              <el-button v-if="appArtifact" size="small" @click="reloadPreview">刷新</el-button>
+              <el-button v-if="appArtifact" size="small" :disabled="sending || starting || canRetry" @click="repairApp">修复最新版</el-button>
+              <el-button v-if="appArtifact" size="small" @click="refreshAppPreview">刷新</el-button>
               <el-button v-if="appArtifact && previewVersion !== appVersions[0]?.version" size="small" @click="restoreAppVersion">恢复此版</el-button>
             </div>
           </div>
-          <iframe v-if="appArtifact" :key="previewKey" ref="appFrame" class="app-frame"
-            :srcdoc="previewDocument" sandbox="allow-scripts" referrerpolicy="no-referrer"
+          <iframe v-if="appArtifact && appStateReady" :key="previewKey" ref="appFrame" class="app-frame"
+            :srcdoc="previewDocument" sandbox="allow-scripts allow-forms" referrerpolicy="no-referrer"
             title="生成应用的隔离预览" />
           <div v-else class="app-preview-empty">
-            {{ starting || sending ? '正在生成并校验应用，请稍候…' : '输入应用需求并发送，生成后可直接在这里使用。' }}
+            {{ appArtifact && !appStateReady ? (previewError || '正在读取应用数据…') : starting || sending ? '正在生成并校验应用，请稍候…' : '输入应用需求并发送，生成后可直接在这里使用。' }}
           </div>
           <p v-if="previewError" class="app-preview-error">预览运行异常：{{ previewError }}。可继续对话修复，上一版仍可恢复。</p>
         </section>
@@ -198,7 +207,7 @@
             type="textarea"
             :autosize="{ minRows: 2, maxRows: 6 }"
             placeholder="补充任务要求… Ctrl + Enter 发送"
-            @keydown.ctrl.enter.prevent="sendMessage"
+            @keydown.ctrl.enter.prevent="sendMessage()"
           />
           <div v-if="selected.workflow?.connector_codes?.length" class="composer-chips">
             <span
@@ -231,7 +240,7 @@
               round
               :disabled="!reply.trim() || canRetry"
               :loading="sending"
-              @click="sendMessage"
+              @click="sendMessage()"
               >发送 ↗</el-button
             >
           </div>
@@ -395,6 +404,9 @@ const previewVersion = ref(null)
 const previewError = ref('')
 const previewKey = ref(0)
 const previewVisible = ref(true)
+let appState = {}
+const appStateReady = ref(false)
+const appWriteQueues = new Map()
 const search = ref('')
 const draft = ref('')
 const reply = ref('')
@@ -451,14 +463,42 @@ const canRebuildApp = computed(() => selected.value && !appArtifact.value &&
   (messages.value.some((message) => message.role === 'user') || selected.value.description?.trim()) &&
   (!selected.value.workflow?.app_mode || selected.value.status === '生成失败'))
 function readAppState(taskId) {
-  try { return JSON.parse(localStorage.getItem('general-ai-app-state-' + taskId) || '{}') }
+  try {
+    const value = JSON.parse(localStorage.getItem('general-ai-app-state-' + taskId) || '{}')
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  }
   catch { return {} }
 }
+async function loadAppState(taskId) {
+  appStateReady.value = false
+  previewError.value = ''
+  const pending = [...appWriteQueues.entries()].filter(([key]) => key.startsWith(taskId + ':')).map(([, promise]) => promise)
+  if (pending.length) await Promise.allSettled(pending)
+  let state = {}
+  try {
+    state = await api.taskAppState(taskId)
+    const legacy = readAppState(taskId)
+    for (const [key, value] of Object.entries(legacy)) {
+      if (Object.hasOwn(state, key)) continue
+      if (key.length > 100 || ['__proto__', 'prototype', 'constructor'].includes(key)) continue
+      await api.saveTaskAppState(taskId, key, value)
+      state[key] = value
+    }
+  } catch {
+    if (selected.value?.id === taskId) previewError.value = '服务端应用数据读取或迁移失败，请点击刷新重试'
+    return
+  }
+  if (selected.value?.id === taskId) {
+    appState = state
+    appStateReady.value = true
+  }
+}
 const previewDocument = computed(() => {
-  if (!appArtifact.value || !selected.value) return ''
+  if (!appArtifact.value || !selected.value || !appStateReady.value) return ''
+  const currentPreview = previewKey.value
   const app = appArtifact.value
-  const state = JSON.stringify(readAppState(selected.value.id)).replace(/</g, '\\u003c')
-  const bootstrap = 'const state=' + state + ';window.appStore={get:key=>state[key],set:(key,value)=>{state[key]=value;parent.postMessage({type:"app-store-set",key,value},"*")}};window.addEventListener("error",e=>parent.postMessage({type:"app-preview-error",message:e.message},"*"));window.addEventListener("unhandledrejection",e=>parent.postMessage({type:"app-preview-error",message:String(e.reason)},"*"));'
+  const state = JSON.stringify(appState).replace(/</g, '\\u003c')
+  const bootstrap = '(()=>{const state=Object.assign(Object.create(null),' + state + ');const generation=' + currentPreview + ';let seq=0;const requests=new Map();window.appStore={get:key=>state[key],set:(key,value)=>new Promise((resolve,reject)=>{const requestId=++seq;const previous=state[key];state[key]=value;const timer=setTimeout(()=>{requests.delete(requestId);if(state[key]===value)state[key]=previous;reject(new Error("应用数据保存超时"))},20000);requests.set(requestId,{resolve,reject,timer,key,value,previous});try{parent.postMessage({type:"app-store-set",taskId:' + selected.value.id + ',generation,requestId,key,value},"*")}catch(error){clearTimeout(timer);requests.delete(requestId);if(state[key]===value)state[key]=previous;reject(error)}})};window.addEventListener("message",event=>{const data=event.data;if(event.source!==parent||!data||data.type!=="app-store-result"||data.generation!==generation||!requests.has(data.requestId))return;const pending=requests.get(data.requestId);requests.delete(data.requestId);clearTimeout(pending.timer);if(data.ok)pending.resolve(true);else{if(state[pending.key]===pending.value)state[pending.key]=pending.previous;pending.reject(new Error(data.error||"应用数据保存失败"))}});window.addEventListener("error",e=>parent.postMessage({type:"app-preview-error",message:e.message},"*"));window.addEventListener("unhandledrejection",e=>parent.postMessage({type:"app-preview-error",message:String(e.reason)},"*"));})();'
   const scriptEnd = '</scr' + 'ipt>'
   return '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'nonce-app-preview\'; style-src \'unsafe-inline\'; img-src data: blob:; connect-src \'none\'; form-action \'none\'; base-uri \'none\'"><meta name="viewport" content="width=device-width,initial-scale=1"><style>' + app.css + '</style></head><body>' + app.html + '<script nonce="app-preview">' + bootstrap + scriptEnd + '<script nonce="app-preview">' + app.javascript + scriptEnd + '</body></html>'
 })
@@ -468,18 +508,34 @@ function onAppMessage(event) {
   if (!data || typeof data !== 'object') return
   if (data.type === 'app-preview-error') {
     previewError.value = String(data.message || '未知错误').slice(0, 200)
-  } else if (data.type === 'app-store-set' && typeof data.key === 'string' && data.key.length <= 100) {
-    try {
-      const state = readAppState(selected.value.id)
-      state[data.key] = data.value
-      const encoded = JSON.stringify(state)
-      if (encoded.length <= 100000) localStorage.setItem('general-ai-app-state-' + selected.value.id, encoded)
-    } catch {
-      previewError.value = '应用数据无法保存到本机浏览器'
+  } else if (data.type === 'app-store-set' && data.taskId === selected.value.id && data.generation === previewKey.value) {
+    const taskId = selected.value.id
+    const frame = event.source
+    const respond = (ok, error = '') => frame.postMessage({ type: 'app-store-result', generation: data.generation, requestId: data.requestId, ok, error }, '*')
+    if (typeof data.key !== 'string' || !data.key || data.key.length > 100 ||
+      ['__proto__', 'prototype', 'constructor'].includes(data.key)) {
+      respond(false, '应用数据键无效')
+      return
     }
+    const queueKey = taskId + ':' + data.key
+    const previous = appWriteQueues.get(queueKey) || Promise.resolve()
+    const write = previous.catch(() => {}).then(() => api.saveTaskAppState(taskId, data.key, data.value))
+    appWriteQueues.set(queueKey, write)
+    write.then(() => {
+      if (selected.value?.id === taskId) appState = { ...appState, [data.key]: data.value }
+      respond(true)
+    }).catch((error) => {
+      if (selected.value?.id === taskId) previewError.value = '应用数据保存失败：' + (error.response?.data?.detail || error.message)
+      respond(false, '服务端保存失败')
+    }).finally(() => { if (appWriteQueues.get(queueKey) === write) appWriteQueues.delete(queueKey) })
   }
 }
-function reloadPreview() { previewError.value = ''; previewKey.value++ }
+function reloadPreview() { previewKey.value++ }
+async function refreshAppPreview() {
+  if (!selected.value) return
+  await loadAppState(selected.value.id)
+  reloadPreview()
+}
 function readPreviewVisibility(taskId) {
   try { return localStorage.getItem('general-ai-preview-visible-' + taskId) !== 'off' }
   catch { return true }
@@ -516,7 +572,7 @@ function streamEvent(taskId) {
     if (selected.value?.id !== taskId) return
     if (event.type === 'user_message') {
       messages.value.push(event.message)
-      reply.value = ''
+      if (reply.value.trim() === event.message.content.trim()) reply.value = ''
     } else if (event.type === 'delta') {
       const key = 'task-' + taskId + '-agent-' + event.agent_index
       let bubble = messages.value.find((item) => item.streamKey === key)
@@ -542,6 +598,7 @@ function streamEvent(taskId) {
       appVersions.value.unshift({ id: event.artifact.id, version: event.artifact.version, title: event.artifact.title })
       selected.value.status = '可预览'
       selected.value.result = ''
+      if (!appStateReady.value) loadAppState(taskId)
       reloadPreview()
     }
     nextTick(() => { if (messageList.value) messageList.value.scrollTop = messageList.value.scrollHeight })
@@ -631,6 +688,7 @@ async function selectTask(task) {
   messages.value = []
   attachments.value = []
   appArtifact.value = null
+  appStateReady.value = false
   appVersions.value = []
   previewVersion.value = null
   previewError.value = ''
@@ -647,6 +705,7 @@ async function selectTask(task) {
     appArtifact.value = artifact
     appVersions.value = versions
     previewVersion.value = artifact?.version || null
+    if (task.workflow?.app_mode) await loadAppState(task.id)
     await nextTick()
     if (messageList.value) messageList.value.scrollTop = messageList.value.scrollHeight
   } catch {
@@ -717,8 +776,12 @@ async function createTask() {
   }
 }
 
-async function sendMessage() {
-  const content = reply.value.trim()
+function repairApp() {
+  sendMessage('请根据历史需求修复当前应用：将开发解释移到对话回复，完善所有实际交互和输入校验，并使用平台的服务端应用存储保存数据。保留原有功能。')
+}
+
+async function sendMessage(contentOverride = '') {
+  const content = (contentOverride || reply.value).trim()
   if (!content || !selected.value || sending.value || canRetry.value) return
   sending.value = true
   try {
@@ -1333,6 +1396,15 @@ async function saveConnectors() {
   margin-bottom: 6px;
   color: var(--cyan);
   font-size: 11px;
+}
+.message-agent-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 10px;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
 }
 .stream-cursor {
   color: var(--cyan);

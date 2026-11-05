@@ -92,6 +92,12 @@
               item.api_key ? 'Key 已配置' : 'Key 未配置'
             }}</el-tag>
           </div>
+          <div v-if="section === 'agents'" class="agent-bindings">
+            <div><span>模型</span><b>{{ modelBinding(item) }}</b></div>
+            <div><span>Prompt</span><b>{{ promptBinding(item) }}</b></div>
+            <div><span>Skill</span><b>{{ bindingSummary(item.skill_config_ids, skillOptions) }}</b></div>
+            <div><span>Tools</span><b>{{ bindingSummary(item.tool_config_ids, toolOptions) }}</b></div>
+          </div>
           <div class="card-actions">
             <el-button @click="edit(item)"
               ><el-icon><Edit /></el-icon> 编辑</el-button
@@ -104,7 +110,7 @@
               @click="openKnowledge(item)"
               >查看</el-button
             ><el-button v-else type="primary" plain @click="toggle(item)">{{
-              item.status === '已启用' ? '停用' : '启用'
+              (section === 'agents' ? item.enabled : item.status === '已启用') ? '停用' : '启用'
             }}</el-button
             ><el-button type="danger" plain @click="remove(item)">删除</el-button>
           </div>
@@ -139,7 +145,7 @@
       :title="form.id ? '编辑' + currentName : '新增' + currentName"
       width="min(780px,94vw)"
       destroy-on-close
-      ><el-form :model="form" label-position="top"
+      ><el-form :model="form" label-position="top" class="config-form"
         ><div class="form-grid">
           <el-form-item label="名称" required><el-input v-model="form.name" /></el-form-item
           ><el-form-item label="标识 / Code"><el-input v-model="form.code" /></el-form-item>
@@ -181,55 +187,41 @@
                   value="长期记忆" /></el-select
             ></el-form-item>
           </div>
-          <el-form-item label="系统 Prompt"
+          <div class="agent-binding-title">
+            <div><strong>角色能力配置</strong><small>选择当前智能体使用的 Prompt、Skill 和 Tools。</small></div>
+            <el-button size="small" @click="applyRoleRecommendation">按角色补充推荐</el-button>
+          </div>
+          <el-form-item label="绑定 Prompt（可选）">
+            <el-select v-model="form.prompt_config_id" clearable filterable
+              placeholder="选择角色 Prompt" style="width: 100%">
+              <el-option v-if="form.prompt_config_id && !selectedPrompt"
+                :label="'已删除的 Prompt #' + form.prompt_config_id" :value="form.prompt_config_id" />
+              <el-option v-for="prompt in promptOptions" :key="prompt.id"
+                :label="prompt.name + (prompt.code ? ' · ' + prompt.code : '') + (prompt.status === '已启用' ? '' : ' · ' + prompt.status)"
+                :value="prompt.id" :disabled="prompt.status !== '已启用' && prompt.id !== form.prompt_config_id" />
+            </el-select>
+            <div v-if="form.prompt_config_id && !selectedPrompt" class="binding-note warning-note">已绑定的 Prompt 不存在，请清除或重新选择。</div>
+            <div v-if="selectedPrompt" class="prompt-detail">
+              <span>{{ selectedPrompt.description || '暂无说明' }}</span>
+              <span v-if="selectedPrompt.status !== '已启用'" class="warning-note">该 Prompt 已停用，不会生效。</span>
+              <details v-if="selectedPrompt.content"><summary>查看 Prompt 正文</summary><pre>{{ selectedPrompt.content }}</pre></details>
+            </div>
+            <div class="binding-note">启用的 Prompt 会作为角色指令；下方补充指令会追加在其后。</div>
+          </el-form-item>
+          <el-form-item label="Agent 补充指令"
             ><el-input
               v-model="form.prompt"
               type="textarea"
-              :rows="6"
-              placeholder="定义 Agent 的身份、职责、工作方式和输出格式" /></el-form-item
-          ><el-form-item label="绑定 Prompt（可选）">
-            <el-select
-              v-model="form.prompt_config_id"
-              clearable
-              filterable
-              placeholder="选择平台 Prompt"
-              style="width: 100%"
-            >
-              <el-option
-                v-for="prompt in promptOptions"
-                :key="prompt.id"
-                :label="prompt.name"
-                :value="prompt.id"
-              />
-            </el-select>
-          </el-form-item>
+              :rows="4"
+              placeholder="可补充此 Agent 的具体职责与要求" /></el-form-item>
           <el-form-item label="绑定 Skill（可多选）">
-            <el-select
-              v-model="form.skill_config_ids"
-              multiple
-              collapse-tags
-              filterable
-              placeholder="选择平台 Skill"
-              style="width: 100%"
-            >
-              <el-option
-                v-for="skill in skillOptions"
-                :key="skill.id"
-                :label="skill.name"
-                :value="skill.id"
-              />
-            </el-select> </el-form-item
-          ><el-form-item label="绑定工具（逗号分隔）"
-            ><el-input
-              :model-value="(form.tools || []).join(', ')"
-              @update:model-value="
-                (v) =>
-                  (form.tools = v
-                    .split(',')
-                    .map((x) => x.trim())
-                    .filter(Boolean))
-              "
-              placeholder="网页检索, 文档生成, 代码审查" /></el-form-item
+            <ConfigBindingPicker v-model="form.skill_config_ids" label="Skill" :items="skillOptions" />
+          </el-form-item>
+          <el-form-item label="绑定 Tools（可多选）">
+            <ConfigBindingPicker v-model="form.tool_config_ids" label="Tools" :items="toolOptions" />
+            <div class="binding-note">工具绑定目前仅保存角色配置，自动工具调用尚未接入。</div>
+            <div v-if="form.tools?.length" class="binding-note">历史工具标签：{{ form.tools.join('、') }}（仅保留原数据）</div>
+          </el-form-item
           ><el-form-item label="启用状态"
             ><el-switch v-model="form.enabled" /></el-form-item></template
         ><template v-if="section === 'models'"
@@ -268,7 +260,8 @@
               />
             </el-form-item>
             <el-form-item label="请求超时（秒）">
-              <el-input-number v-model="form.extra.timeout_seconds" :min="5" :max="180" :step="5" />
+              <el-input-number v-model="form.extra.timeout_seconds" :min="5" :max="3600" :step="5" :precision="0" />
+              <div class="binding-note">可设置 5–3600 秒；供应商或网关可能另有超时限制。</div>
             </el-form-item>
           </div>
           <div class="form-grid">
@@ -295,8 +288,8 @@
         ><el-form-item label="说明"
           ><el-input v-model="form.description" type="textarea" :rows="2" /></el-form-item
         ><el-form-item
-          v-if="['prompts', 'skills'].includes(section)"
-          :label="section === 'prompts' ? 'Prompt 正文' : 'SKILL.md 内容'"
+          v-if="['prompts', 'skills', 'tools'].includes(section)"
+          :label="section === 'prompts' ? 'Prompt 正文' : section === 'skills' ? 'Skill 内容' : '工具用途与约束'"
           ><el-input
             v-model="form.content"
             type="textarea"
@@ -313,6 +306,7 @@
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
+import ConfigBindingPicker from '../components/ConfigBindingPicker.vue'
 import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts'
 import {
@@ -367,7 +361,18 @@ const knowledgeFile = ref(null)
 const togglingId = ref(null)
 const modelOptions = ref([]),
   promptOptions = ref([]),
-  skillOptions = ref([])
+  skillOptions = ref([]),
+  toolOptions = ref([])
+const selectedPrompt = computed(() => promptOptions.value.find((item) => item.id === form.value.prompt_config_id))
+const roleRecommendations = [
+  { match: /产品经理|产品负责人|product/i, prompt: 'app-product-manager', skills: ['app-requirements'], tools: ['app-document-reader'] },
+  { match: /架构|architect/i, prompt: 'app-architect', skills: ['app-api-contract'], tools: ['app-workspace-files', 'app-document-reader'] },
+  { match: /前端|frontend|front.end/i, prompt: 'app-frontend-developer', skills: ['app-frontend-implementation', 'app-accessibility'], tools: ['app-workspace-files', 'app-browser-preview', 'app-code-runner'] },
+  { match: /后端|backend|back.end/i, prompt: 'app-backend-developer', skills: ['app-api-contract', 'app-backend-implementation'], tools: ['app-workspace-files', 'app-api-client', 'app-code-runner'] },
+  { match: /移动|mobile|android|ios/i, prompt: 'app-mobile-developer', skills: ['app-interaction-spec', 'app-accessibility'], tools: ['app-workspace-files', 'app-code-runner'] },
+  { match: /测试|质保|\bqa\b|test/i, prompt: 'app-qa-engineer', skills: ['app-qa-acceptance'], tools: ['app-browser-preview', 'app-api-client', 'app-code-runner'] },
+  { match: /交互|用户体验|设计师|\bux\b|\bui\b/i, prompt: 'app-ux-designer', skills: ['app-interaction-spec', 'app-accessibility'], tools: ['app-design-assets', 'app-browser-preview'] }
+]
 const filtered = computed(() =>
   rows.value.filter((x) =>
     (x.name + ' ' + x.code + ' ' + x.description).toLowerCase().includes(search.value.toLowerCase())
@@ -417,7 +422,8 @@ function blank() {
     enabled: true,
     model_config_id: null,
     prompt_config_id: null,
-    skill_config_ids: []
+    skill_config_ids: [],
+    tool_config_ids: []
   }
 }
 function go(key) {
@@ -488,10 +494,11 @@ async function load() {
   }
   try {
     if (section.value === 'agents') {
-      ;[modelOptions.value, promptOptions.value, skillOptions.value] = await Promise.all([
+      ;[modelOptions.value, promptOptions.value, skillOptions.value, toolOptions.value] = await Promise.all([
         api.config('models'),
         api.config('prompts'),
-        api.config('skills')
+        api.config('skills'),
+        api.config('tools')
       ])
     }
     rows.value = section.value === 'agents' ? await api.agents() : await api.config(section.value)
@@ -507,7 +514,8 @@ function edit(x) {
         api_key: '',
         extra: { max_tokens: 3000, timeout_seconds: 60, ...(x.extra || {}) },
         tools: x.tools || [],
-        skill_config_ids: x.skill_config_ids || []
+        skill_config_ids: x.skill_config_ids || [],
+        tool_config_ids: x.tool_config_ids || []
       }
     : blank()
   form.value.category = section.value
@@ -516,21 +524,62 @@ function edit(x) {
 function syncModelName(id) {
   form.value.model_name = modelOptions.value.find((model) => model.id === id)?.model_name || ''
 }
+function modelBinding(agent) {
+  const model = modelOptions.value.find((item) => item.id === agent.model_config_id)
+  return model ? model.name + (model.status === '已启用' ? '' : '（' + model.status + '）') : agent.model_config_id ? '模型已删除' : agent.model_name || '未绑定'
+}
+function promptBinding(agent) {
+  if (!agent.prompt_config_id) return agent.prompt ? '自定义补充指令' : '未绑定'
+  const prompt = promptOptions.value.find((item) => item.id === agent.prompt_config_id)
+  return prompt ? prompt.name + (prompt.status === '已启用' ? '' : '（' + prompt.status + '）') : 'Prompt 已删除'
+}
+function bindingSummary(ids, options) {
+  if (!ids?.length) return '未绑定'
+  return ids.map((id) => {
+    const item = options.find((option) => option.id === id)
+    return item ? item.name + (item.status === '已启用' ? '' : '（' + item.status + '）') : '#' + id + '（已删除）'
+  }).join('、')
+}
+function applyRoleRecommendation() {
+  const recommendation = roleRecommendations.find((item) => item.match.test(form.value.role || '')) ||
+    roleRecommendations.find((item) => item.match.test(form.value.name || ''))
+  if (!recommendation) return ElMessage.warning('未识别出开发角色，请填写角色名称或手动选择配置')
+  const findEnabled = (items, code) => items.find((item) => item.code === code && item.status === '已启用')
+  let added = 0
+  if (!form.value.prompt_config_id) {
+    const prompt = findEnabled(promptOptions.value, recommendation.prompt)
+    if (prompt) { form.value.prompt_config_id = prompt.id; added++ }
+  }
+  if (!form.value.skill_config_ids.length) {
+    form.value.skill_config_ids = recommendation.skills.map((code) => findEnabled(skillOptions.value, code)?.id).filter(Boolean)
+    added += form.value.skill_config_ids.length
+  }
+  if (!form.value.tool_config_ids.length) {
+    form.value.tool_config_ids = recommendation.tools.map((code) => findEnabled(toolOptions.value, code)?.id).filter(Boolean)
+    added += form.value.tool_config_ids.length
+  }
+  if (added) ElMessage.success('已补充 ' + added + ' 项推荐，请确认后保存')
+  else ElMessage.warning('已有绑定或推荐配置尚未启用，请手动调整')
+}
 async function save() {
   if (!form.value.name.trim()) return ElMessage.warning('请填写名称')
+  if (section.value === 'models' && (!Number.isInteger(form.value.extra.timeout_seconds) ||
+      form.value.extra.timeout_seconds < 5 || form.value.extra.timeout_seconds > 3600)) {
+    return ElMessage.warning('请求超时请输入 5 至 3600 秒的整数')
+  }
   try {
     if (section.value === 'agents')
       await api.saveAgent({
         ...form.value,
-        temperature: Number(form.value.temperature || 0.3),
+        temperature: Number(form.value.temperature ?? 0.3),
         tools: form.value.tools || []
       })
     else await api.saveConfig({ ...form.value, category: section.value })
     ElMessage.success('配置已保存')
     dialog.value = false
     await load()
-  } catch {
-    ElMessage.error('保存失败，请检查后端服务')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '保存失败，请检查后端服务')
   }
 }
 async function toggle(x) {
@@ -538,7 +587,8 @@ async function toggle(x) {
   togglingId.value = x.id
   try {
     const updated = section.value === 'agents'
-      ? await api.saveAgent({ ...x, enabled: !x.enabled, status: x.enabled ? '离线' : '在线' })
+      ? await api.saveAgent({ ...x, enabled: !x.enabled, status: x.enabled ? '离线' : '在线',
+          tools: x.tools || [], skill_config_ids: x.skill_config_ids || [], tool_config_ids: x.tool_config_ids || [] })
       : await api.setConfigStatus(x.id, x.status === '已启用' ? '已停用' : '已启用')
     Object.assign(x, updated)
     ElMessage.success(updated.status)
@@ -618,7 +668,20 @@ onMounted(load)
 .config-card {
   min-height: 185px;
 }
+.config-form { max-height: 65vh; overflow-y: auto; overflow-x: hidden; padding-right: 8px; }
+.binding-note { margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.warning-note { color: var(--orange); }
+.agent-binding-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 12px 0 18px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.agent-binding-title small { display: block; margin-top: 4px; color: var(--muted); }
+.prompt-detail { width: 100%; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; line-height: 1.5; }
+.prompt-detail span { display: block; }
+.prompt-detail summary { margin-top: 5px; color: var(--cyan); cursor: pointer; }
+.prompt-detail pre { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; color: var(--muted); }
 .card-state { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.agent-bindings { display: grid; gap: 5px; margin: 8px 0 12px; font-size: 12px; }
+.agent-bindings div { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 8px; }
+.agent-bindings span { color: var(--muted); }
+.agent-bindings b { font-weight: 400; overflow-wrap: anywhere; }
 .knowledge-actions, .knowledge-document { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .knowledge-actions { justify-content: flex-start; margin-bottom: 16px; }
 .knowledge-document, .knowledge-hit { padding: 10px 0; border-bottom: 1px solid var(--line); }

@@ -57,21 +57,23 @@ export const api = {
   runningTaskCount: () => http.get('/tasks/running-count').then((r) => r.data.count),
   createTask: (x) => http.post('/tasks', x).then((r) => r.data),
   taskApp: (id) => http.get('/tasks/' + id + '/app').then((r) => r.data),
+  taskAppState: (id) => http.get('/tasks/' + id + '/app/state').then((r) => r.data),
+  saveTaskAppState: (id, key, value) => http.put('/tasks/' + id + '/app/state', { key, value }).then((r) => r.data),
   taskAppVersions: (id) => http.get('/tasks/' + id + '/app/versions').then((r) => r.data),
   taskAppVersion: (id, version) => http.get('/tasks/' + id + '/app/versions/' + version).then((r) => r.data),
   restoreTaskAppVersion: (id, version) => http.post('/tasks/' + id + '/app/versions/' + version + '/restore').then((r) => r.data),
   taskMessages: (id) => http.get('/tasks/' + id + '/messages').then((r) => r.data),
   sendTaskMessage: (id, content) =>
-    http.post('/tasks/' + id + '/messages', { content }, { timeout: 600000 }).then((r) => r.data),
+    http.post('/tasks/' + id + '/messages', { content }, { timeout: 0 }).then((r) => r.data),
   streamTaskMessage: (id, content, onEvent) =>
     streamTask('/tasks/' + id + '/messages/stream', { content }, onEvent),
   streamTaskRetry: (id, onEvent) => streamTask('/tasks/' + id + '/retry/stream', null, onEvent),
   streamTaskAppRebuild: (id, onEvent) => streamTask('/tasks/' + id + '/app/rebuild/stream', null, onEvent),
   streamTaskStart: (id, onEvent) => streamTask('/tasks/' + id + '/start/stream', null, onEvent),
   retryTaskMessage: (id) =>
-    http.post('/tasks/' + id + '/retry', null, { timeout: 600000 }).then((r) => r.data),
+    http.post('/tasks/' + id + '/retry', null, { timeout: 0 }).then((r) => r.data),
   testModel: (id, apiKey = '') =>
-    http.post('/config/models/' + id + '/test', { api_key: apiKey }).then((r) => r.data),
+    http.post('/config/models/' + id + '/test', { api_key: apiKey }, { timeout: 0 }).then((r) => r.data),
   taskAttachments: (id) => http.get('/tasks/' + id + '/attachments').then((r) => r.data),
   uploadTaskAttachment: (id, file) => {
     const data = new FormData()
@@ -85,7 +87,7 @@ export const api = {
   updateTaskConnectors: (id, codes) =>
     http.put('/tasks/' + id + '/connectors', { codes }).then((r) => r.data),
   startTask: (id) =>
-    http.post('/tasks/' + id + '/start', null, { timeout: 600000 }).then((r) => r.data),
+    http.post('/tasks/' + id + '/start', null, { timeout: 0 }).then((r) => r.data),
   config: (cat) => http.get(`/config/${cat}`).then((r) => r.data),
   saveConfig: (x) =>
     x.id

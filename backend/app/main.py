@@ -15,8 +15,8 @@ def startup():
  with engine.begin() as connection:
   inspector=inspect(connection)
   upgrades={
-   'agents': {'model_config_id':'INTEGER','prompt_config_id':'INTEGER','skill_config_ids':'JSON'},
-   'task_messages': {'agent_name':'VARCHAR(120)'},
+   'agents': {'model_config_id':'INTEGER','prompt_config_id':'INTEGER','skill_config_ids':'JSON','tool_config_ids':'JSON'},
+   'task_messages': {'agent_name':'VARCHAR(120)','details':'JSON'},
   }
   for table, columns in upgrades.items():
    if table not in inspector.get_table_names(): continue

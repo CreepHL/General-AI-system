@@ -11,9 +11,9 @@ from sqlalchemy.orm import sessionmaker
 from datetime import timezone,timedelta
 from sqlalchemy import desc,func
 from ..database import get_db
-from ..models import Agent,Team,Task,TaskMessage,TaskAttachment,ConfigItem,Activity,ModelUsage,KnowledgeDocument,KnowledgeChunk,AppArtifact
-from ..schemas import AgentIn,TeamIn,TaskIn,TaskMessageIn,TaskConnectorsIn,ConfigIn,ConfigStatusIn,ModelTestIn
-from ..services.chat_runtime import ChatConfigurationError,ChatProviderError,run_task_turn,stream_task_turn,test_model
+from ..models import Agent,Team,Task,TaskMessage,TaskAttachment,ConfigItem,Activity,ModelUsage,KnowledgeDocument,KnowledgeChunk,AppArtifact,AppData
+from ..schemas import AgentIn,TeamIn,TaskIn,TaskMessageIn,TaskConnectorsIn,ConfigIn,ConfigStatusIn,ModelTestIn,AppDataIn
+from ..services.chat_runtime import ChatConfigurationError,ChatProviderError,model_timeout_seconds,run_task_turn,stream_task_turn,test_model
 from ..services.knowledge import extract_text,chunk_text,search_chunks
 router=APIRouter(prefix='/api')
 logger=logging.getLogger(__name__)
@@ -26,6 +26,7 @@ def dump(obj):
 def validate_agent_bindings(body:AgentIn,db:Session):
  bindings=[(body.model_config_id,'models'),(body.prompt_config_id,'prompts')]
  bindings.extend((id,'skills') for id in body.skill_config_ids)
+ bindings.extend((id,'tools') for id in body.tool_config_ids)
  for id,category in bindings:
   if id is None: continue
   item=db.get(ConfigItem,id)
@@ -80,6 +81,27 @@ def get_task_app(id:int,db:Session=Depends(get_db)):
  if not db.get(Task,id): raise HTTPException(404,'Task not found')
  artifact=db.query(AppArtifact).filter(AppArtifact.task_id==id).order_by(desc(AppArtifact.version)).first()
  return dump(artifact) if artifact else None
+@router.get('/tasks/{id}/app/state')
+def get_task_app_state(id:int,db:Session=Depends(get_db)):
+ task=db.get(Task,id)
+ if not task or not (task.workflow or {}).get('app_mode'): raise HTTPException(404,'应用任务不存在')
+ return {row.key:json.loads(row.value_json) for row in db.query(AppData).filter(AppData.task_id==id).all()}
+@router.put('/tasks/{id}/app/state')
+def put_task_app_state(id:int,body:AppDataIn,db:Session=Depends(get_db)):
+ task=db.get(Task,id)
+ if not task or not (task.workflow or {}).get('app_mode'): raise HTTPException(404,'应用任务不存在')
+ key=body.key
+ if not key or len(key)>100 or key in {'__proto__','prototype','constructor'}: raise HTTPException(422,'应用数据键无效')
+ try: encoded=json.dumps(body.value,ensure_ascii=False,allow_nan=False,separators=(',',':'))
+ except (TypeError,ValueError): raise HTTPException(422,'应用数据必须可以 JSON 序列化')
+ if len(encoded.encode('utf-8'))>60000: raise HTTPException(413,'单项应用数据超出 60 KB 限制')
+ row=db.query(AppData).filter(AppData.task_id==id,AppData.key==key).first()
+ if not row:
+  if db.query(AppData).filter(AppData.task_id==id).count()>=100: raise HTTPException(413,'应用数据项已达到上限')
+  row=AppData(task_id=id,key=key,value_json=encoded); db.add(row)
+ else: row.value_json=encoded
+ db.commit()
+ return {'ok':True}
 @router.get('/tasks/{id}/app/versions')
 def get_task_app_versions(id:int,db:Session=Depends(get_db)):
  if not db.get(Task,id): raise HTTPException(404,'Task not found')
@@ -320,7 +342,12 @@ def test_model_connection(id:int,body:ModelTestIn,db:Session=Depends(get_db)):
  except ChatProviderError as exc: raise HTTPException(502,str(exc)) from exc
 @router.post('/config')
 def create_config(body:ConfigIn,db:Session=Depends(get_db)):
+ validate_model_timeout(body)
  x=ConfigItem(**body.model_dump()); db.add(x); db.commit(); db.refresh(x); return dump(x)
+def validate_model_timeout(body:ConfigIn):
+ if body.category!='models': return
+ try: model_timeout_seconds(body.extra)
+ except ChatConfigurationError as exc: raise HTTPException(422,str(exc)) from exc
 @router.patch('/config/{id}/status')
 def update_config_status(id:int,body:ConfigStatusIn,db:Session=Depends(get_db)):
  x=db.get(ConfigItem,id)
@@ -331,6 +358,7 @@ def update_config_status(id:int,body:ConfigStatusIn,db:Session=Depends(get_db)):
 def update_config(id:int,body:ConfigIn,db:Session=Depends(get_db)):
  x=db.get(ConfigItem,id)
  if not x: raise HTTPException(404,'Config not found')
+ validate_model_timeout(body)
  values=body.model_dump()
  if not values.get('api_key'): values['api_key']=x.api_key
  for k,v in values.items(): setattr(x,k,v)
